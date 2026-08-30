@@ -1,142 +1,161 @@
-import fitz
 import pdfplumber
+import os
+from langchain_openai import ChatOpenAI
+
+# ==========================================
+# 1. LLM 配置 (请替换为你使用的大模型配置)
+# ==========================================
+client = ChatOpenAI(
+    model="qwen3.8-max",
+    api_key=os.getenv("QW_API_KEY"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    temperature=0.1
+)
+
+CLEAN_PROMPT = """
+你是一名专业的中文规章制度文档清洗器。
+
+你的任务是清洗下面由 PDF 转换得到的 纯Markdown/文本，目的是恢复原始文档的结构，使其适合后续 RAG 检索。
+
+【绝对规则】
+1. 不得新增原文没有的信息。
+2. 不得删除任何有效信息。
+3. 不得改变任何数字、分数、百分比、日期、次数、等级、条件。
+4. 不得改变“不得”“不”“未”“无”等否定含义。
+5. 不得修改原文的政策规定和评分规则。
+6. 不得自行解释或总结。
+7. 不得把不同规则合并成一个规则。
+8. 不得把一个规则拆成失去上下文的碎片。
+9. 只修复 PDF 转换造成的错误换行、词语被拆开、标题层级丢失、表格阅读顺序混乱等。
+10. 如果无法确定某处原始结构，不要猜测，保留原文并标记：[结构无法确定]
+11.如果单元格内包含复杂的干部考核或矩阵加分规则，请将其单独提取并还原为标准的 4-5 列 Markdown 表格，不要用 <br> 拼接到同一个单元格内。
+
+【结构要求】
+请尽可能恢复以下 Markdown 层级：#、##、###、#### 等。
+对于 PDF 转换产生的表格，如果能够根据原文明确恢复表格关系，可以转换成 Markdown 表格；如果无法确定，不要猜测。
+
+【输出要求】
+只输出清洗后的 Markdown。不要输出解释。不要输出“以下是清洗结果”等额外文字。
+
+原始输入数据：
+{raw_text}
+"""
+
 pdf_path = r"D:\Documents\Desktop\9.18★ 《海洋信息工程学院学生专业奖学金评定和综合素质量化测评办法》的通知_20250918173325.pdf"
 
 
+# ==========================================
+# 2. PDF 提取函数 (保留你原有的逻辑)
+# ==========================================
+def clean_text(text):
+    if text is None: return ""
+    text = str(text).replace("\n", " ")
+    return " ".join(text.split()).strip()
+
 
 def clean_cell(cell):
-    """清洗单元格里的多余换行和空格"""
-    if not cell:
-        return ""
-    # 将单元格内部的换行符替换为空格，并压缩连续空格
-    return " ".join(cell.split())
+    if cell is None: return ""
+    return clean_text(cell)
 
 
-def table_to_markdown(table):
-    """将 pdfplumber 提取的二维表格矩阵转为标准的 Markdown 表格文本"""
-    if not table:
-        return ""
+def is_fragmented_table(table):
+    if not table: return False
+    row_lengths = [len(row) for row in table]
+    max_cols = max(row_lengths)
+    return max_cols >= 8
 
-    cleaned_table = []
+
+def repair_fragmented_table(table):
+    repaired_rows = []
     for row in table:
-        cleaned_row = [clean_cell(cell) for cell in row]
-        # 过滤掉完全为空的整行
-        if any(cleaned_row):
-            cleaned_table.append(cleaned_row)
+        row = ["" if cell is None else str(cell) for cell in row]
+        text = " ".join("".join(row).split())
+        if text: repaired_rows.append(text)
+    return repaired_rows
 
-    if not cleaned_table:
+
+def extract_pdf(pdf_path):
+    pages = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            print(f"正在提取第 {page_num} 页...")
+            text = page.extract_text() or ""
+            text = text.strip()
+
+            raw_tables = page.extract_tables()
+            tables = []
+            for table_index, table in enumerate(raw_tables):
+                cleaned_table = []
+                for row in table:
+                    if not row: continue
+                    cleaned_row = [clean_cell(cell) for cell in row]
+                    if any(cleaned_row):
+                        cleaned_table.append(cleaned_row)
+                if cleaned_table:
+                    tables.append({"table_index": table_index + 1, "rows": cleaned_table})
+
+            pages.append({"page": page_num, "text": text, "tables": tables})
+    return pages
+
+
+# ==========================================
+# 3. LLM 转换函数
+# ==========================================
+def call_llm_for_markdown(raw_content):
+    """调用 LLM 将拼接好的原始文本转换为最终的 Markdown"""
+    print("正在调用 LLM 进行深度清洗与 Markdown 重构...")
+
+    prompt = CLEAN_PROMPT.replace("{raw_text}", raw_content)
+
+    try:
+        response = client.invoke(prompt)
+
+        return response.content.strip()
+    except Exception as e:
+        print(f"LLM 调用失败: {e}")
         return ""
 
-    md_lines = []
-    # 提取第一行为表头
-    header = cleaned_table[0]
-    md_lines.append("| " + " | ".join(header) + " |")
-    md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
 
-    # 处理后面的每一行数据
-    for row in cleaned_table[1:]:
-        # 防止列数对不齐（填充空列）
-        if len(row) < len(header):
-            row += [""] * (len(header) - len(row))
-        elif len(row) > len(header):
-            row = row[: len(header)]
-        md_lines.append("| " + " | ".join(row) + " |")
-
-    return "\n".join(md_lines)
-
-
-def process_pdf(pdf_path):
-    full_document = []
-
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            print(f"正在处理第 {page_num} 页...")
-
-            # 1. 提取当前页的正文文本
-            page_text = page.extract_text() or ""
-
-            # 2. 提取当前页的所有表格，并转为 Markdown 格式
-            tables = page.extract_tables()
-            md_tables = []
-            for t in tables:
-                md_t = table_to_markdown(t)
-                if md_t:
-                    md_tables.append(md_t)
-
-            # 3. 按页拼装
-            page_content = f"## 第 {page_num} 页\n\n"
-            if page_text.strip():
-                page_content += f"### 正文内容\n{page_text.strip()}\n\n"
-
-            if md_tables:
-                page_content += "### 结构化表格\n" + "\n\n".join(md_tables) + "\n\n"
-
-            full_document.append(page_content)
-
-    return "\n".join(full_document)
-
-
+# ==========================================
+# 4. 主流程编排
+# ==========================================
 if __name__ == "__main__":
-    # 执行提取
-    markdown_result = process_pdf(pdf_path)
+    # 1. 提取 PDF
+    extracted_pages = extract_pdf(pdf_path)
 
-    # 1. 打印预览前 1000 个字符
-    print("\n" + "=" * 20 + " 提取预览 " + "=" * 20)
-    print(markdown_result[:1000])
+    # 2. 将提取出的正文和表格拼接成一个长文本，供 LLM 理解
+    raw_document_builder = []
 
-    # 2. 保存为 .md 文件（用于下一步的 RAG 结构化切分）
-    output_md_path = "奖学金评定办法_提取结果.md"
-    with open(output_md_path, "w", encoding="utf-8") as f:
-        f.write(markdown_result)
+    for page in extracted_pages:
+        raw_document_builder.append(f"\n========== 第 {page['page']} 页 ==========\n")
 
-    print(f"\n✅ 处理完成！已成功将正文与表格提取并存入：{output_md_path}")
-# def extract_text(pdf_path):
-#     docs = fitz.open(pdf_path)
-#     all_docs = []
-#     for page_num,doc in enumerate(docs):
-#         text = doc.get_text()
-#         all_docs.append(
-#             {
-#                 "page": page_num + 1,
-#                 "text": text
-#             }
-#         )
-#     return all_docs
-# all_docs_list = extract_text(pdf_path)
+        # 写入正文
+        if page["text"]:
+            raw_document_builder.append("【页面正文提取】")
+            raw_document_builder.append(page["text"])
 
-# for doc in all_docs_list[:3]:
-#     print("页码",doc["page"])
-#     print(doc["text"])
-# #     print()
-# def extract_tables(pdf_path):
-#     tables = []
-#     with pdfplumber.open(pdf_path) as pdf:
-#         for page_num,page in enumerate(pdf.pages):
-#             page_tables = page.extract_tables()
-#             for table in page_tables:
-#                 tables.append(
-#                     {
-#                         "page": page_num + 1,
-#                         "table": table
-#                     }
-#                 )
-#     return tables
-#
-# def clean_tables(text):
-#     if text is None:
-#         return ""
-#     elif "\n" in text :
-#         text = text.replace("\n", "")
-#         return text.strip()
-#     else:
-#         return text
-#
-# if __name__ == "__main__":
-#     tables = extract_tables(pdf_path)
-#     new_tables = []
-#     for table in tables:
-#         for row in table["table"]:
-#             for col in row:
-#                 i = clean_tables(col)
-#                 new_tables.append(i)
-#     print(new_tables)
+        # 写入表格结构数据
+        for table in page["tables"]:
+            raw_document_builder.append(f"\n--- 表格 {table['table_index']} ---")
+            rows = table["rows"]
+
+            if is_fragmented_table(rows):
+                raw_document_builder.append("检测到碎片化表格：")
+                repaired = repair_fragmented_table(rows)
+                for row in repaired:
+                    raw_document_builder.append(row)
+            else:
+                raw_document_builder.append("正常表格：")
+                raw_document_builder.append(str(rows))
+
+    raw_content = "\n".join(raw_document_builder)
+
+    # 3. 发送给 LLM
+    final_markdown = call_llm_for_markdown(raw_content)
+
+    #4. 保存结果
+    output_path = pdf_path.replace(".pdf", "_cleaned.md")
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(final_markdown)
+
+    print(f"\n处理完成！最终 Markdown 已保存至：{output_path}")

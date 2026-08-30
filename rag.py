@@ -1,57 +1,77 @@
-from langchain_classic import text_splitter
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter,MarkdownHeaderTextSplitter
-from langchain_community.embeddings import DashScopeEmbeddings
 import os
-import tiktoken
+from langchain_chroma import Chroma
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
+import json
+from langchain_core.documents import Document
 
-# markdown_path = r"C:\Users\laixiaohan\PycharmProjects\PythonProject\奖学金评定_无表格.md"
-# headers_to_split_on = [
-#     ("##","page_header"),
-#     ("###","section_header")
-# ]
-# with open(markdown_path, "r", encoding="utf-8") as f:
-#     markdown = f.read()
-# markdown_splitter = MarkdownHeaderTextSplitter(
-#     headers_to_split_on = headers_to_split_on,
-#     strip_headers= False
-#     )
-#
-# header_splits = markdown_splitter.split_text(markdown)
-#
-# text_splitter = RecursiveCharacterTextSplitter(
-#     chunk_size=1000,
-#     chunk_overlap=200,
-#     separators=["\n\n","\n","。"," ",""]
+
+# json_path = (
+#     r"C:\Users\laixiaohan\PycharmProjects\PythonProject\rag_knowledge_base.json"
 # )
 #
-# final_docs = text_splitter.split_documents(header_splits)
+# with open(json_path, "r", encoding="utf-8") as f:
+#     raw_chunks = json.load(f)
+#
+# documents = []
+#
+# # 2. 遍历 JSON，转化为 LangChain Document 对象
+# for chunk in raw_chunks:
+#     # 提取标题层级，拼接成上下文文本（防止模型失去上下文感知）
+#     section_breadcrumb = " -> ".join(chunk.get("section_path", []))
+#
+#     # 最终注入向量模型的文本：包含层级 + 正文
+#     page_content = f"文档路径: {section_breadcrumb}\n正文内容:\n{chunk.get('content', '')}"
+#
+#     # 构建向量库 Metadata（方便过滤与后续引用）
+#     metadata = {
+#         "chunk_id": chunk.get("chunk_id"),
+#         "doc_title": chunk.get("doc_title"),
+#         "section_path": " -> ".join(chunk.get("section_path", [])),
+#         "module": chunk.get("metadata", {}).get("module", ""),
+#         "sub_module": chunk.get("metadata", {}).get("sub_module", ""),
+#         "score_type": chunk.get("metadata", {}).get("score_type", ""),
+#         # 可以存更多你需要的检索过滤字段...
+#     }
+#
+#     doc = Document(page_content=page_content, metadata=metadata)
+#     documents.append(doc)
 #
 # embeddings = DashScopeEmbeddings(
 #     model="qwen3.7-text-embedding",
-#     dashscope_api_key =  os.getenv("QW_API_KEY")
-#
+#     dashscope_api_key=os.getenv("QW_API_KEY"),
 # )
 #
+# vectorstore = Chroma.from_documents(
+#     documents=documents,
+#     embedding=embeddings,
+#     persist_directory="./.chroma_db",
+#     collection_name="scholarship_rules"
+# )
+#
+# print(f"成功导入 {len(documents)} 个 Chunk 到向量库中！")
+
+# embeddings = DashScopeEmbeddings(
+#     model="qwen3.7-text-embedding",
+#     dashscope_api_key=os.getenv("QW_API_KEY"),
+# )
 # vectorstore = Chroma(
 #     persist_directory="./.chroma_db",
 #     embedding_function =embeddings,
-#
+#     collection_name="scholarship_rules"
 # )
-# batch_size = 16
-# for i in range(0, len(final_docs), batch_size):
-#     batch = final_docs[i:i+batch_size]
-#     vectorstore.add_documents(batch)
-#
-# print("已完成")
-
 # data = vectorstore.get()
+#
+#
 # docs = data["documents"]
 # ids = data["ids"]
-# for i in docs:
+# for num,i in enumerate(docs,start=1):
+#     print(f"---------------------------{num}-----------------------------------")
 #     print(i)
-#     print()
+#     print(f"---------------------------{num}-----------------------------------")
 # print(len(docs))
 
 # data = vectorstore.get()
