@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 验收装置的副产物：跑装置时会生成（CDP 巡检报告与截图、临时目录、预览页），不该进仓库
+_cdp_page_probe.json
+_cdp_shot_*.png
+_rt_tmp/
+_gate_tmp/
+_cite_preview.html
+_p0_4_preview.html
+*.err
