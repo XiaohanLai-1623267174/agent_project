@@ -94,3 +94,9 @@ python rerank_server.py
 3. **本地重排需要自备模型**（`bge-reranker-v2-m3`，fp16 约 1.1 GB 显存）；不装则用云端重排或关闭。
 4. **首次入库需要可用的 LLM 额度**：清洗与 chunk 元数据两环会调用模型，额度不足时上传会失败（而聊天仍正常，容易误判为「只有上传坏了」）。
 5. `requirements.txt` 的版本取自开发环境（Python 3.14.6 / Node v24.20.0），**尚未在干净环境复核**。
+
+## 许可
+
+本项目采用 [MIT 许可](LICENSE)：可自由使用、修改、分发（含商用），只需保留版权声明与许可全文。
+
+Copyright (c) 2026 Xiaohan Lai
