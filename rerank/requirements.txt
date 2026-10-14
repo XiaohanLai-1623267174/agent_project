@@ -1,0 +1,7 @@
+# 本地重排服务依赖（与 server 分开：这里的 torch 很重，不需要重排的环境不必装）。
+# 版本读自作者的 rerank_env；CUDA 版本请按自己显卡选（cu121/cu124 等）。
+fastapi==0.141.1
+pydantic==2.13.5
+torch==2.12.0+cu126
+transformers==5.17.0
+uvicorn==0.54.0
