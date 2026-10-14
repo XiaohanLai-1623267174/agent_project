@@ -1,0 +1,290 @@
+/* ========== Light Theme Global Styles ========== */
+
+:root {
+  --bg-primary: #f5f6f8;
+  --bg-secondary: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-hover: #f0f1f5;
+  --bg-input: #f0f2f5;
+  --text-primary: #1a1a2e;
+  --text-secondary: #5a5a72;
+  --text-muted: #999aae;
+  --accent: #4d6bfe;
+  --accent-light: #5b78ff;
+  --accent-dim: rgba(77, 107, 254, 0.08);
+  --border: #e2e4ec;
+  --border-light: #eef0f5;
+  --success: #10b981;
+  --error: #ef4444;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans SC", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code",
+    "SF Mono", "Source Code Pro", Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
+/* ===== 代码 =====
+   marked v18 起 setOptions 的 highlight 已被移除，必须改用 marked-highlight 扩展
+   （见 ChatView.vue）。在此之前围栏块的 <code> 拿不到 .hljs 类，会命中下面的行内
+   代码规则被染成粉色 —— 这就是"代码块看起来像行内代码"的根因。
+   另：.hljs 落在【行内元素 <code>】上，必须显式 display:block，
+   否则 overflow-x 不生效、长代码行无法横向滚动。 */
+.markdown-body pre {
+  background: #f4f4f8;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.markdown-body pre code,
+.markdown-body pre code.hljs {
+  display: block;
+  background: transparent;
+  border: none;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+/* 行内代码 —— 只针对不在 <pre> 里的 code */
+.markdown-body :not(pre) > code {
+  background: #f0f1f5;
+  color: #d63384;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.markdown-body p { margin-bottom: 8px; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body ul, .markdown-body ol { padding-left: 20px; margin-bottom: 8px; }
+.markdown-body li { margin-bottom: 4px; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+  color: var(--text-secondary);
+  margin: 8px 0;
+}
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.9em; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+.markdown-body th { background: var(--bg-hover); font-weight: 600; }
+.markdown-body a { color: var(--accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { margin: 12px 0 6px; font-weight: 600; }
+
+
+/* ===== 引用溯源：正文角标 + 来源面板 ===== */
+
+/* 正文里的 [n] 角标（由 ChatView.linkifyCitations 生成） */
+.markdown-body .cite-ref {
+  display: inline-block;
+  min-width: 16px;
+  margin: 0 1px;
+  padding: 0 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  vertical-align: super;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.markdown-body .cite-ref:hover { background: rgba(77, 107, 254, 0.18); }
+
+/* ★ 幽灵角标：正文写了一个【没有对应来源】的编号（模型可能编造）。
+   刻意与真角标明显不同：去掉可点的强调色，改成"空心 + 灰"，并加一条虚线底边。
+   光标也不再用 pointer —— 它点了确实什么都不会发生，就别装作能点。 */
+.markdown-body .cite-ref.is-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed currentColor;
+  cursor: help;
+}
+.markdown-body .cite-ref.is-ghost:hover { background: transparent; }
+
+.msg-sources { margin-top: 8px; }
+
+.msg-sources.is-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.sources-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sources-toggle:hover { background: var(--bg-input); color: var(--text-primary); }
+.sources-cand { color: var(--text-muted); }
+/* 重排降级提示：这是全站唯一的"警示色"。
+   刻意不用中性灰 —— 它是一个真实的降级状态，必须与"检索到 N 段"这类
+   普通信息在视觉上区分开，否则用户会忽略它。 */
+.sources-warn {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: help;
+}
+.src-chevron { transition: transform 0.18s; }
+.src-chevron.open { transform: rotate(180deg); }
+
+/* ===== 检索详情（调试/对照用）=====
+   刻意做得比「来源」按钮更次要：它是给开发者/对照用的，
+   普通用户的主路径仍然是「看答案 + 看引用」。 */
+.msg-debug { margin: 6px 0 0; }
+.debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.debug-toggle:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.debug-grid {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.debug-row { display: flex; gap: 10px; font-size: 12px; line-height: 1.6; }
+.debug-k { flex: none; width: 58px; color: var(--text-muted); }
+.debug-v { color: var(--text-secondary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.debug-why { color: var(--text-muted); }
+.debug-num { font-variant-numeric: tabular-nums; }
+/* 历史消息没有完整 trace（后端只持久化了 message_sources）——
+   必须说清是「没保存」，而不是让用户以为「没有检索」。 */
+.msg-debug-note { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+
+.sources-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sources-list li {
+  display: flex;
+  gap: 9px;
+  padding: 9px 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s, background 0.15s;
+}
+/* 点击正文角标后高亮的那一条 */
+.sources-list li.hit {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.src-n {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.src-main { min-width: 0; flex: 1; }
+.src-head { display: flex; align-items: baseline; gap: 8px; }
+.src-file {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-score {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.src-path {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-snippet {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

@@ -1,0 +1,33 @@
+# ---- 密钥：绝不进仓库 ----
+.env
+.env.*
+!.env.example
+*.key
+API_KEYS.md
+
+# ---- 运行期数据（含真实用户信息，绝不提交）----
+app.db
+app.db.*
+uploads/
+.chroma_db/
+.chroma_*/
+knowledge_markdown/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ---- 前端 ----
+node_modules/
+dist/
+.vite/
+*.log
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1 @@
+"""kb_bench 沙箱里的 agent 包副本（用于验证 LLM 调用 skill）。"""
