@@ -13,15 +13,16 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { backendHome } from './_device_paths.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const KB = join(HERE, '..', 'kb_bench')
+const KB = backendHome()
 const TMP = join(HERE, '_gate_tmp')
 const GATE = join(HERE, '_debug_panel_test.mjs')
 
 const MUTATIONS = [
   {
-    id: 'J', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_lianxi.py'),
+    id: 'J', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_project.py'),
     why: '/chat 忘了把 request.force_rag 传下去（按钮变成纯装饰）',
     // ★ 锚点随 §39.38 更新：这个调用现在多传一个 web_search，旧锚点（只到 force_rag)）命中 0 次。
     from: ',\n                                                 force_rag=request.force_rag,\n                                                 web_search=request.web_search)',
@@ -29,7 +30,7 @@ const MUTATIONS = [
     caughtBy: '/chat 把 request.force_rag 透传给 rag_response',
   },
   {
-    id: 'J2', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_lianxi.py'),
+    id: 'J2', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_project.py'),
     why: '★ 联网版：/chat 忘了把 request.web_search 传下去（点了联网却什么都没搜）',
     from: ',\n                                                 force_rag=request.force_rag,\n                                                 web_search=request.web_search)',
     to: ',\n                                                 force_rag=request.force_rag)',
@@ -56,7 +57,7 @@ const MUTATIONS = [
     caughtBy: 'ChatView: 帧里消费了 payload.web',
   },
   {
-    id: 'Y', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_lianxi.py'),
+    id: 'Y', env: 'DEBUG_PANEL_FASTAPI', src: join(KB, 'fastapi_project.py'),
     why: '★ 联网版：直答分支补发的状态帧不再带 web（开了联网、走了闲聊 ⇒ 前端一无所知）',
     from: '    if isinstance(trace, dict) and isinstance(trace.get("web"), dict):\n        out["web"] = trace["web"]\n',
     to: '',

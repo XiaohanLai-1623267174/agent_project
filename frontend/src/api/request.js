@@ -5,7 +5,7 @@
  * - Centralized baseURL
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000"
+const BASE_URL = import.meta.env?.VITE_API_BASE || "http://127.0.0.1:8000"
 
 function getToken() {
   return localStorage.getItem("auth_token")

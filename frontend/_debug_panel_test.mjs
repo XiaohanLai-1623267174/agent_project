@@ -22,12 +22,15 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parse } from '@vue/compiler-dom'
+import { backendFile, backendHome } from './_device_paths.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 // 路径可被环境变量覆盖 —— 不是为了生产，而是为了让【反向对照】能指向坏副本。
 // 第一版没这个开关，我用临时目录做对照时脚本直接崩了：失败理由错了 == 一次假绿。
-const PY = process.env.DEBUG_PANEL_PY || join(HERE, '..', 'kb_bench', 'langchain_project.py')
+const PY = backendFile('langchain_project.py', process.env.DEBUG_PANEL_PY)
 const VUE = process.env.DEBUG_PANEL_VUE || join(HERE, 'src', 'views', 'ChatView.vue')
+// 让"跑不起来"这件事一眼可诊断：路径解析器会在 kb_bench（开发布局）与 server（本仓库布局）之间选
+console.log('  后端源码目录: ' + backendHome())
 
 const py = readFileSync(PY, 'utf8')
 const vue = readFileSync(VUE, 'utf8')
@@ -38,7 +41,7 @@ const vue = readFileSync(VUE, 'utf8')
 //   而 ROUTER_LABELS 只解释【doc_router 的原因】。加上联网后，`_web_block()` 里出现
 //   http_error 这套**另一套词汇**，这条检查就误报了（把两套互不相干的词汇表耦合在一起）。
 //   现在：doc_router 那套仍对 ROUTER_LABELS；联网那套改对【后端降级 legend + REASON_TEXT】。
-const WS = process.env.DEBUG_PANEL_WS || join(HERE, '..', 'kb_bench', 'websearch.py')
+const WS = backendFile('websearch.py', process.env.DEBUG_PANEL_WS)
 const ws = readFileSync(WS, 'utf8')
 const wsReasonBlock = (ws.match(/REASON_TEXT\s*=\s*\{([\s\S]*?)\n\}/) || [])[1] || ''
 const wsReasons = new Set([...wsReasonBlock.matchAll(/"([a-z_]+)":/g)].map(m => m[1]))
@@ -219,7 +222,7 @@ if (EL_DEBUG) {
 }
 
 // ---------- 后端补发帧 ----------
-const FASTAPI = process.env.DEBUG_PANEL_FASTAPI || join(HERE, '..', 'kb_bench', 'fastapi_lianxi.py')
+const FASTAPI = backendFile('fastapi_project.py', process.env.DEBUG_PANEL_FASTAPI)
 const api = readFileSync(FASTAPI, 'utf8')
 // ★ 帧是**多行**调用（`event="sources",` 后面还有单独一行 `)`）—— 正则要把两种写法都认下，
 //   否则"防空过"会误报"没找到"，后面几条断言全部不再执行（第一版就踩了这个）。
@@ -228,9 +231,9 @@ const frameBlock = (api.match(/if\s+not\s+sent_sources[\s\S]{0,900}?event="sourc
 //   所以这条断言必须**两处一起看**：帧要真的调用它（接线），载荷里要真的写着 attempted=False（语义）。
 const payloadFn = (api.match(/def _status_payload\([\s\S]{0,900}?\n    return out\n/) || [])[0] || ''
 if (!frameBlock) {
-  check('★ 防空过：在 fastapi_lianxi.py 里找到"补发状态帧"那段', false, '没找到 —— 正则或代码变了')
+  check('★ 防空过：在 fastapi_project.py 里找到「补发状态帧」那段', false, '没找到 —— 正则或代码变了')
 } else {
-  check('★ 防空过：在 fastapi_lianxi.py 里找到"补发状态帧"那段', true,
+  check('★ 防空过：在 fastapi_project.py 里找到「补发状态帧」那段', true,
         `${Buffer.byteLength(frameBlock)} B`)
   check('★ 防空过：取到 _status_payload 函数体（attempted=False 住在那里）', payloadFn.length > 0,
         `${Buffer.byteLength(payloadFn)} B`)
@@ -252,7 +255,7 @@ if (!frameBlock) {
 // ★ 这里用「按钮元素(AST) + 四处真源码的关键传参」判定**接线**；
 //   行为本身（classify 到底有没有被调）由 kb_bench/test_force_rag_route.py 真调 route() 负责。
 {
-  const SCHEMAS = process.env.DEBUG_PANEL_SCHEMAS || join(HERE, '..', 'kb_bench', 'schemas.py')
+  const SCHEMAS = backendFile('schemas.py', process.env.DEBUG_PANEL_SCHEMAS)
   const schemas = readFileSync(SCHEMAS, 'utf8')
   const reqBlock = (schemas.match(/class ChatRequest\(BaseModel\):([\s\S]*?)\nclass /) || [])[1] || ''
   check('★ 防空过：取到 schemas.py 的 ChatRequest 类体', reqBlock.length > 0, `${Buffer.byteLength(reqBlock)} B`)

@@ -9,6 +9,7 @@ import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
 import { createSseParser } from './src/api/request.js'
+import { fixtureFile } from './_device_paths.mjs'
 
 let fail = 0
 function check(ok, label, extra = '') {
@@ -62,8 +63,12 @@ check(preText.includes('b[0]') && preText.includes('c[1]'),
       '代码块的文本内容里 b[0]/c[1] 未被改动', JSON.stringify(preText.trim()))
 check(out.includes('data-cite="1"') && out.includes('data-cite="3"'), '角标带 data-cite 编号')
 
-const body = fs.readFileSync('../kb_bench/_sse_body.txt', 'utf8')
-const expect = JSON.parse(fs.readFileSync('../kb_bench/_sse_expect.json', 'utf8'))
+// 夹具来源：开发布局用【真实抓包】，本仓库布局用随仓库发布的【合成夹具】（见 frontend/README.md）
+const bodyPath = fixtureFile('_sse_body.txt')
+const expectPath = fixtureFile('_sse_expect.json')
+console.log('  夹具: ' + bodyPath + (bodyPath.includes('_fixtures') ? '（合成夹具，内容全为虚构）' : '（真实抓包）'))
+const body = fs.readFileSync(bodyPath, 'utf8')
+const expect = JSON.parse(fs.readFileSync(expectPath, 'utf8'))
 
 let text = ''
 let sources = null

@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { marked } from 'marked'
+import { fixtureFile } from './_device_paths.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const VUE_PATH = process.env.CITE_VUE || join(HERE, 'src', 'views', 'ChatView.vue')
@@ -173,10 +174,10 @@ const SRC5 = [1, 2, 3, 4, 5].map(n => ({ n, filename: `f${n}.docx` }))
   let body = ''
   let expect = null
   try {
-    body = readFileSync(join(HERE, '..', 'kb_bench', '_sse_body.txt'), 'utf8')
-    expect = JSON.parse(readFileSync(join(HERE, '..', 'kb_bench', '_sse_expect.json'), 'utf8'))
+    body = readFileSync(fixtureFile('_sse_body.txt'), 'utf8')
+    expect = JSON.parse(readFileSync(fixtureFile('_sse_expect.json'), 'utf8'))
   } catch (e) {
-    check('★防空过：能读到真实抓包夹具（_sse_body.txt / _sse_expect.json）', false, String(e && e.message))
+    check('★防空过：能读到抓包夹具（真实抓包，或随仓库发布的合成夹具）', false, String(e && e.message))
     ok = false
   }
   if (ok) {

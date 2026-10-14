@@ -1,0 +1,49 @@
+{
+  "_note": "合成夹具：由 _fixtures/make_synthetic.mjs 生成，内容全为虚构，非真实抓包。",
+  "_why": "真实抓包含用户所在学校名与上传文档名，属用户内容，故不随公开仓库发布。",
+  "_parse": "本文件的 text / sources_payload 由 make_synthetic.mjs 里的独立正则解析产出，不是抓包现场的后端输出。",
+  "text": "一、示例基本条件 [1]\n\n1. 本条为合成夹具内容，与任何真实制度无关。\n2. 用于验证 SSE 解析器在按 7 字节切分时的边界处理与中文解码。\n3. 标点应原样保留：，。「」（）——《》 等。\n\n二、示例具体条件 [2]\n\n1. 示例课程学时加权平均成绩达 70 分。\n2. 示例综合素质测评分在本专业前 50% 以内。\n\n三、示例禁止情形 [3]\n\n1. 示例情形甲。\n2. 示例情形乙。",
+  "sources_payload": {
+    "attempted": true,
+    "candidates": 3,
+    "sources": [
+      {
+        "n": 1,
+        "document_id": 1,
+        "chunk_id": "chunk_001",
+        "filename": "示例制度文档.md",
+        "doc_title": "示例制度文档（合成夹具）",
+        "section_path": "示例制度文档（合成夹具） -> 第一条 示例条款 -> （一） 示例基本条件",
+        "score_type": "示例类别",
+        "target_audience": "示例对象",
+        "score": 0.9,
+        "snippet": "示例条文：本条由 _fixtures/make_synthetic.mjs 生成，与任何真实制度无关。"
+      },
+      {
+        "n": 2,
+        "document_id": 1,
+        "chunk_id": "chunk_002",
+        "filename": "示例制度文档.md",
+        "doc_title": "示例制度文档（合成夹具）",
+        "section_path": "示例制度文档（合成夹具） -> 第一条 示例条款 -> （二） 示例具体条件",
+        "score_type": "示例类别",
+        "target_audience": "示例对象",
+        "score": 0.8,
+        "snippet": "示例条文：示例课程学时加权平均成绩达 70 分。"
+      },
+      {
+        "n": 3,
+        "document_id": 1,
+        "chunk_id": "chunk_003",
+        "filename": "示例制度文档.md",
+        "doc_title": "示例制度文档（合成夹具）",
+        "section_path": "示例制度文档（合成夹具） -> 第一条 示例条款 -> （三） 示例禁止情形",
+        "score_type": "示例类别",
+        "target_audience": "示例对象",
+        "score": 0.7,
+        "snippet": "示例条文：示例情形甲、示例情形乙。"
+      }
+    ],
+    "reranked": true
+  }
+}
