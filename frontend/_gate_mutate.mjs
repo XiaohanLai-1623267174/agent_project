@@ -114,6 +114,16 @@ const MUTATIONS = [
     to: 'const v = localStorage.getItem(WEB_SEARCH_KEY)\n  try {\n    void 0',
     caughtBy: '读存储抛异常 ⇒ 退回默认【关】且不崩',
   },
+  {
+    id: 'Z3', gate: '_websearch_test.mjs', env: 'WEBSEARCH_VUE',
+    src: join(HERE, 'src', 'views', 'ChatView.vue'),
+    why: '★ 折叠默认改【展开】（网页参考又变回一长条堆叠，用户要求的效果没达到）',
+    // 坏副本**必须仍可编译**（同 Z2 的纪律）：所以不是把 details 换成 div（那样 </details> 会悬空、
+    // 文件直接坏掉，前置检查先红），而是加一个 `open` 属性 —— 文件完好，只有行为变坏。
+    from: '<details v-if="msg.web.count > 0" class="web-fold">',
+    to: '<details v-if="msg.web.count > 0" class="web-fold" open>',
+    caughtBy: '⑰★ 默认**收起**',
+  },
 ]
 
 mkdirSync(TMP, { recursive: true })

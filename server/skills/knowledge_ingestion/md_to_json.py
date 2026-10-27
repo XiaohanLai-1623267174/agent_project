@@ -282,7 +282,15 @@ def markdown_to_chunks(markdown: str, max_workers: int = 2) -> list[dict[str, An
     )
 
     result: list[dict[str, Any]] = []
+    missing = 0
     for index, (chunk, metadata) in enumerate(zip(source_chunks, metas), start=1):
+        # ★ 实测（§39.64）：简历.pdf 某块结构化抽取返回 None，原代码直接 .model_dump()
+        #   ⇒ AttributeError ⇒ 整份入库失败，前面 ~21s 清洗 + ~5s 元数据全白跑。
+        #   取舍：单块降级而非整份失败 —— 用 ChunkMetadata 默认值兜底，计数并记降级。
+        fallback = metadata is None
+        if fallback:
+            metadata = ChunkMetadata()
+            missing += 1
         result.append(
             {
                 "chunk_id": f"chunk_{index:03d}",
@@ -290,6 +298,12 @@ def markdown_to_chunks(markdown: str, max_workers: int = 2) -> list[dict[str, An
                 "section_path": chunk["section_path"],
                 "content": chunk["content"],
                 "metadata": metadata.model_dump(),
+                "metadata_fallback": fallback,
             }
         )
+    if missing:
+        from llm_roles import note_degradation
+        note_degradation("metadata", "structured_none",
+                         "%d/%d 块结构化抽取返回 None，已用默认值兜底" % (missing, len(source_chunks)))
+        print("[3/4] 元数据兜底 %d/%d 块（未阻塞入库）" % (missing, len(source_chunks)), flush=True)
     return result

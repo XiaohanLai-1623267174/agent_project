@@ -326,7 +326,10 @@ if (!frameBlock) {
   check('ChatView: 没搜到也要显示原因（诚实规则）',
         /本次联网搜索没搜到可用结果/.test(vue), '')
   check('ChatView: 网页条目不参与引用编号（不编号、不算依据）',
-        !/web-title[^>]*>\s*\[/.test(vue) && /<ol v-if="msg\.web\.count > 0" class="web-list">/.test(vue), '')
+        !/web-title[^>]*>\s*\[/.test(vue) && /<ol class="web-list">/.test(vue)
+        // 2026-10-16：网页参考改成可折叠（details）⇒ `<ol v-if="msg.web.count > 0" ...>` 那条守卫
+        // 移到了外层 details 上。这里跟着改 —— 不改的话会因"标记变了"而**假红**（本装置当时确实红了）。
+        && /<details v-if="msg\.web\.count > 0" class="web-fold">/.test(vue), '')
   // ★ 后端每个【联网】原因都要有 ①降级 legend 的中文解释 ②REASON_TEXT 的人话
   //   —— 前端「没搜到（原因）」直接显示 REASON_TEXT，缺一条就会显示英文原因码。
   const legendBlock = (api.match(/_DEGRADATION_LEGEND\s*=\s*\{([\s\S]*?)\n\}/) || [])[1] || ''

@@ -62,12 +62,12 @@ ROLE_MODELS = {
     },
     "rewrite": {
         "base_url": MODELSCOPE_BASE_URL, "api_key_env": "MS_API_KEY",
-        "model": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
         "extra_body": {"enable_thinking": False},
     },
     "answer": {
         "base_url": MODELSCOPE_BASE_URL, "api_key_env": "MS_API_KEY",
-        "model": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
         "extra_body": {"enable_thinking": False},  # 待验证项：回答质量是否需要保留思考（§29.5-1）
     },
     "direct": {

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>markdown-sanitize-device</title>
+  <style>
+    body { font: 18px/1.55 ui-sans-serif, system-ui, sans-serif; padding: 16px; }
+    pre { font-size: 17px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; white-space: pre-wrap; }
+    .fail { color: #b42318; }
+    .pass { color: #067647; }
+  </style>
+</head>
+<body>
+  <h1>Markdown 消毒装置（§39.77）</h1>
+  <p>
+    为什么要放在 <code>public/</code>：Vite 对 <code>public/</code> 下的 HTML 不做转换 ⇒ 不会注入 HMR 客户端
+    ⇒ 无头 Chrome 截图时不会因为常驻 WebSocket 卡住（实测 <code>--dump-dom</code> 在本机直接返回 0 字节，
+    所以改用 <code>--screenshot</code> + 读图）。<br />
+    运行方式：<code>npm run dev</code> 起 Vite，然后<br />
+    <code>chrome --headless=new --virtual-time-budget=15000 --window-size=1100,1700
+    --screenshot=out.png http://localhost:5173/_markdown_sanitize_device.html</code><br />
+    断言的结论写在下方 <code>&lt;pre&gt;</code> 里（末行 <code>RESULT PASS n/n</code>）。
+    <strong>没有 dev server 就跑不了</strong>：页面 import 的是 <code>/src/utils/markdown.js</code>，需要 Vite 转译。
+  </p>
+  <pre id="out">RUNNING</pre>
+
+  <script type="module">
+    import { renderMarkdown, sanitizeHtml, stripCitations } from '/src/utils/markdown.js'
+import { cleanSectionPath, sourcesHint } from '/src/utils/sources.js'
+
+    const results = []
+    const chk = (name, cond, detail = '') => {
+      results.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' | ' + detail))
+    }
+
+    /**
+     * 反向对照：把载荷真的插进 DOM，确认它确实带危险属性。
+     * 少了这一步，「消毒后没有 onerror」可能只是因为载荷压根没进来（空过）。
+     */
+    function payloadIsLive(html, probe) {
+      const box = document.createElement('div')
+      box.innerHTML = html
+      return probe(box)
+    }
+
+    const cases = [
+      {
+        name: 'inject_img_onerror',
+        payload: '<img src="x" onerror="window.__pwned=1">',
+        live: box => {
+          const el = box.querySelector('img')
+          return !!el && el.getAttribute('onerror') !== null
+        },
+        danger: /onerror/i,
+      },
+      {
+        name: 'inject_script_tag',
+        payload: '<script>window.__pwned=2<\/script>',
+        live: box => box.querySelectorAll('script').length > 0,
+        danger: /<script/i,
+      },
+      {
+        name: 'inject_javascript_href',
+        payload: '<a href="javascript:window.__pwned=3">点我</a>',
+        live: box => {
+          const el = box.querySelector('a')
+          return !!el && /^\s*javascript:/i.test(el.getAttribute('href') || '')
+        },
+        danger: /javascript:/i,
+      },
+      {
+        name: 'inject_iframe',
+        payload: '<iframe src="https://example.invalid/x"></iframe>',
+        live: box => box.querySelectorAll('iframe').length > 0,
+        danger: /<iframe/i,
+      },
+      {
+        name: 'inject_inline_style',
+        payload: '<div style="position:fixed;inset:0;z-index:9999">遮住整页</div>',
+        live: box => {
+          const el = box.querySelector('div')
+          return !!el && el.hasAttribute('style')
+        },
+        danger: /style\s*=/i,
+      },
+      {
+        name: 'inject_form',
+        payload: '<form action="https://example.invalid/steal"><input name="q"></form>',
+        live: box => box.querySelectorAll('form').length > 0,
+        danger: /<form/i,
+      },
+    ]
+
+    for (const c of cases) {
+      // 1) 防空过：先证明这个载荷真的危险
+      chk(c.name + '.payload_is_live', payloadIsLive(c.payload, c.live), '载荷插进 DOM 后没找到危险特征')
+      // 2) 消毒后必须干净
+      let out = ''
+      try {
+        out = sanitizeHtml(c.payload)
+      } catch (e) {
+        out = 'THROW:' + e.message
+      }
+      chk(c.name + '.sanitized_clean', !c.danger.test(out), '仍有危险特征：' + out.slice(0, 140))
+    }
+
+    // ---- 正常内容必须活下来（否则「全删掉」也能让上面全绿）----
+    const bold = renderMarkdown('**粗体**')
+    chk('keep.strong', /<strong>粗体<\/strong>/.test(bold), bold)
+
+    const table = renderMarkdown('| 项目 | 值 |\n| --- | --- |\n| 加权成绩 | 87.52 |')
+    chk('keep.table', /<table/.test(table) && /<td/.test(table), table.slice(0, 160))
+
+    const code = renderMarkdown('```js\nconst a = [1, 2]\n```')
+    chk('keep.code_highlight_class', /hljs/.test(code), code.slice(0, 160))
+    chk('keep.code_cite_not_replaced', !/cite-ref/.test(code), '代码里的 [1] 被当引用了：' + code.slice(0, 160))
+
+    const citeReal = renderMarkdown('见 [3]', [{ n: 3 }])
+    chk('keep.cite_real_clickable', /data-cite="3"/.test(citeReal) && !/is-ghost/.test(citeReal), citeReal)
+
+    const citeGhost = renderMarkdown('见 [9]', [{ n: 3 }])
+    chk('keep.cite_ghost_marked', /is-ghost/.test(citeGhost), citeGhost)
+
+    const link = renderMarkdown('[官网](https://example.com/a)')
+    chk('keep.normal_link', /href="https:\/\/example\.com\/a"/.test(link), link)
+
+    // ---- 关键：走 renderMarkdown 这条真实入口（README 里的用法），
+//      否则「只把 renderMarkdown 里的消毒删掉、保留 sanitizeHtml」能骗过上面所有 inject.* ----
+const viaRender = [
+  ["render.img_onerror", '<img src="x" onerror="window.__p3=1">', /onerror/i],
+  ["render.script_tag", "<scr" + "ipt>window.__p4=1</scr" + "ipt>", /<script/i],
+  ["render.javascript_href", "[点我](javascript:window.__p5=1)", /javascript:/i],
+];
+for (const [name, md, danger] of viaRender) {
+  let out = "";
+  try { out = renderMarkdown(md); } catch (e) { out = "THROW:" + e.message; }
+  chk(name + ".clean_through_entry", !danger.test(out), "入口没消毒: " + out.slice(0, 140));
+}
+
+// ---- 引用编号剥离（§39.79）----
+const stripped1 = stripCitations("加权成绩 87.52【1】，排名 2/109【2】。")
+chk("strip.fullwidth_removed", !/[【】]/.test(stripped1), stripped1)
+chk("strip.keeps_numbers", /87\.52/.test(stripped1) && /2\/109/.test(stripped1), stripped1)
+
+const stripped2 = stripCitations("见 [3] 与 [4] 的说法")
+chk("strip.ascii_removed", !/\[3\]|\[4\]/.test(stripped2), stripped2)
+
+const strippedCode = stripCitations("```js\nconst a = [1, 2]\n```")
+chk("strip.fenced_code_preserved", /\[1, 2\]/.test(strippedCode), strippedCode)
+
+const strippedInline = stripCitations("取 `arr[0]` 的值【1】")
+chk("strip.inline_code_preserved", /arr\[0\]/.test(strippedInline) && !/【1】/.test(strippedInline), strippedInline)
+
+const strippedNone = stripCitations("纯文本，没有编号。")
+chk("strip.noop_when_no_citation", strippedNone === "纯文本，没有编号。", strippedNone)
+
+// ---- 来源清单显示规则（§39.82）----
+// 真实数据形态：简历的 section_path 第一段是人名（PDF 自己的 H1），文件名已单独显示 ⇒ 应去掉
+const REAL = "赖肖韩 -> 教育背景 -> 集美大学（一本） | 人工智能 (本科在读)"
+chk("sources.clean_drops_root", cleanSectionPath(REAL) === "教育背景 -> 集美大学（一本） | 人工智能 (本科在读)", cleanSectionPath(REAL))
+chk("sources.clean_keeps_single", cleanSectionPath("奖项荣誉") === "奖项荣誉", cleanSectionPath("奖项荣誉"))
+chk("sources.clean_empty", cleanSectionPath("") === "" && cleanSectionPath(null) === "", "空值应返回空串")
+chk("sources.clean_no_double_arrow", !/->\s*->/.test(cleanSectionPath("a ->  -> b")), cleanSectionPath("a ->  -> b"))
+
+const sameFile = [{ filename: "简历.pdf" }, { filename: "简历.pdf" }]
+chk("sources.hint_same_file", sourcesHint(sameFile) === "简历.pdf · 共 2 处", sourcesHint(sameFile))
+const mixed = [{ filename: "a.pdf" }, { filename: "b.pdf" }]
+chk("sources.hint_mixed", sourcesHint(mixed) === "a.pdf 等 2 处", sourcesHint(mixed))
+chk("sources.hint_empty", sourcesHint([]) === "", sourcesHint([]))
+
+const failed = results.filter(r => r.startsWith('FAIL '))
+    const body = results.map(r => r)
+      .map(line => line.startsWith('FAIL ') ? line : line)
+    const summary = (failed.length ? 'FAIL ' : 'PASS ') + (results.length - failed.length) + '/' + results.length
+    document.title = 'RESULT ' + summary
+    document.getElementById('out').textContent =
+      results.join('\n') + '\nRESULT ' + summary
+  </script>
+</body>
+</html>

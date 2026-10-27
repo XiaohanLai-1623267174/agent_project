@@ -38,7 +38,22 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Callable
+
+
+def _ttl_seconds() -> float:
+    """额度耗尽标记的有效期（秒）。默认 1800。
+
+    为什么需要它（§39.60.6 方案①）：`_exhausted` 只增不减，池把所有 key 标死后
+    **永不自愈** —— 魔搭免费额度按日重置，但进程不感知日期，跨天也必须重启才恢复。
+    给标记加个时间窗，过期自动复活：限流是分钟级、日额度是日级，30 分钟是一个折中。
+    若上游其实仍不可用，复活后会再撞一次 429 并被重新标记（调用方重试次数有上限）。
+    """
+    try:
+        return float(os.getenv("KEY_EXHAUSTED_TTL_S", "1800"))
+    except ValueError:
+        return 1800.0
 
 
 def mask(key: str) -> str:
@@ -66,6 +81,7 @@ class KeyPool:
         self.env_names = list(env_names)
         self._read = read or (lambda n: os.getenv(n))
         self._exhausted: set[str] = set()
+        self._exhausted_at: dict[str, float] = {}   # key -> 标记时刻（用于 TTL 复活）
         self._active: str | None = None          # ★ 正在使用的变量名
         self._pairs: list[tuple[str, str]] = []
         self.reload()
@@ -116,6 +132,7 @@ class KeyPool:
 
         纯查询语义（只在 _active 已失效时才前移），不改变"哪个 key 已死"。
         """
+        self._prune_exhausted()
         if self._active is None:
             self._active = self._first_alive()
         if self._active is not None and self._key_of(self._active) in self._exhausted:
@@ -134,6 +151,18 @@ class KeyPool:
     def mark_exhausted(self, key: str | None) -> None:
         if key:
             self._exhausted.add(key)
+            self._exhausted_at[key] = time.time()
+
+    def _prune_exhausted(self) -> None:
+        """把超过 TTL 的耗尽量标记清掉（方案①：让池能自愈）。"""
+        ttl = _ttl_seconds()
+        if ttl <= 0 or not self._exhausted_at:
+            return
+        now = time.time()
+        stale = [k for k, ts in self._exhausted_at.items() if now - ts >= ttl]
+        for k in stale:
+            self._exhausted.discard(k)
+            self._exhausted_at.pop(k, None)
 
     def exhausted_names(self) -> list[str]:
         return [self.name_of(k) for k in self._exhausted]

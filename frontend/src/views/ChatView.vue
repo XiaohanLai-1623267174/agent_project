@@ -80,6 +80,8 @@
     <main class="chat-main">
       <!-- Header -->
       <header class="chat-header">
+        <!-- 顶部居中：对话 ⇄ 助手 的双向切换（GPT 那种模式选择器的位置） -->
+        <ModeSwitch />
         <div class="header-left">
           <button v-if="sidebarCollapsed" class="btn-icon" title="展开侧栏" @click="sidebarCollapsed = false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -213,18 +215,26 @@
                    ③ 搜不到时**必须显示"没搜到"**，绝不静默留白（静默＝用户以为搜过了）。 -->
             <div v-if="!msg.streaming && msg.role === 'assistant' && msg.web && msg.web.attempted"
                  class="msg-web">
-              <div v-if="msg.web.count > 0" class="web-head">
-                <span class="web-badge">🌐 网页参考 {{ msg.web.count }} 条</span>
-                <span class="web-note">来自公开网页，仅供参考，<b>不是学校文件</b></span>
-              </div>
-              <ol v-if="msg.web.count > 0" class="web-list">
-                <li v-for="(w, wi) in msg.web.items" :key="wi">
-                  <a class="web-title" :href="w.url" target="_blank" rel="noopener noreferrer"
-                     :title="w.url">{{ w.title }}</a>
-                  <span class="web-site">{{ w.site }}</span>
-                  <div v-if="w.snippet" class="web-snippet">{{ w.snippet }}</div>
-                </li>
-              </ol>
+              <!-- ★ 可折叠（2026-10-16 用户：条数一多就「堆叠很多、太杂乱」）。
+                   用原生 <details>：零 JS 状态（不给每条消息存展开态，也就不怕异步消息把它写乱）、
+                   零新依赖；「展开/收起」文案由 CSS 按 [open] 切换，不需要监听事件。
+                   ★ 搜不到那支**故意不折叠**：它只有一行，而「没搜到」是必须一眼看见的诚实信号。 -->
+              <details v-if="msg.web.count > 0" class="web-fold">
+                <summary class="web-head">
+                  <span class="web-badge">🌐 网页参考 {{ msg.web.count }} 条</span>
+                  <span class="web-note">来自公开网页，仅供参考，<b>不是学校文件</b></span>
+                  <span class="web-fold-hint web-fold-open-hint">（点击展开）</span>
+                  <span class="web-fold-hint web-fold-close-hint">（点击收起）</span>
+                </summary>
+                <ol class="web-list">
+                  <li v-for="(w, wi) in msg.web.items" :key="wi">
+                    <a class="web-title" :href="w.url" target="_blank" rel="noopener noreferrer"
+                       :title="w.url">{{ w.title }}</a>
+                    <span class="web-site">{{ w.site }}</span>
+                    <div v-if="w.snippet" class="web-snippet">{{ w.snippet }}</div>
+                  </li>
+                </ol>
+              </details>
               <!-- 搜不到 / 搜失败：如实说明原因，而不是什么都不显示 -->
               <div v-else class="web-empty">
                 本次联网搜索没搜到可用结果{{ msg.web.reason_text ? '（' + msg.web.reason_text + '）' : '' }}
@@ -432,79 +442,20 @@
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { marked } from 'marked'
-import { markedHighlight } from 'marked-highlight'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/atom-one-light.css'
+// Markdown 渲染（marked + 高亮 + 引用角标）已抽到共享模块：
+// agent 页现在也用同一份配置，两页共用一个真源，改一处即可
+import { renderMarkdown } from '../utils/markdown.js'
 import { useAuth } from '../stores/auth.js'
 import { apiGet, apiPost, apiPut, apiDelete, streamChat, createSseParser } from '../api/request.js'
 import KnowledgeUpload from '../components/KnowledgeUpload.vue'
+// 顶部居中模式切换器（对话 / 助手）——与 AgentView 共用同一个组件，避免两页样式漂移
+import ModeSwitch from '../components/ModeSwitch.vue'
 
 const router = useRouter()
 const auth = useAuth()
 
 // ========== Markdown ==========
-// ★ marked v18 起 setOptions 的 highlight 选项已被【移除】，写在这里会被静默忽略 ——
-//   实测渲染出的 <code> 没有任何 hljs-* 类，即语法高亮从未生效（而 highlight.js
-//   仍被打进包里）。必须改用官方的 marked-highlight 扩展。
-//   兜底刻意用 'plaintext' 而不是 hljs.highlightAuto()：后者每次渲染都要扫描全部语言，
-//   而流式回答每收到一个分片就会整段重渲染一次。
-marked.use(
-  markedHighlight({
-    emptyLangClass: 'hljs',
-    langPrefix: 'hljs language-',
-    highlight(code, lang) {
-      const language = hljs.getLanguage(lang) ? lang : 'plaintext'
-      return hljs.highlight(code, { language }).value
-    },
-  }),
-)
-
-marked.setOptions({ breaks: true, gfm: true })
-
-/**
- * 把回答正文里的引用编号 [n] 变成可点击角标（点击后展开对应来源）。
- *
- * ★ 必须先按 <pre>/<code> 把 HTML 切开，只处理【代码块之外】的片段：
- *   代码里到处是 a[0]、x[1] 这种下标，无脑全局替换会直接把用户看到的代码改坏。
- *   String.split 带捕获组时，分隔符（代码段）会落在奇数下标 —— 正好跳过它们。
- *
- * ★★ sources 参数（第十二轮加）：**只有真的存在对应来源的编号才配当"依据"**。
- *   提示词里写了"绝不编造编号"（rag_template 规则 14），但那只是**叮嘱**：
- *   一旦模型写上 [7] 而本条只有 5 条来源，旧实现照样把它渲染成和真引用**一模一样**、
- *   还带 tooltip「查看来源 7」的可点角标 —— 点下去毫无反应。
- *   那等于 UI 承诺了它没有的依据（与 §39.25 要消灭的假信号同一族）。
- *   现在这种编号渲染成「幽灵角标」：**字符照留**（绝不改动回答原文一个字），
- *   但样式与文案都表明"没有对应来源"，不留任何"可点即有效"的暗示。
- */
-function linkifyCitations(html, sources) {
-  if (!html || html.indexOf('[') === -1) return html
-  const available = new Set(
-    (Array.isArray(sources) ? sources : [])
-      .map(s => Number(s && s.n))
-      .filter(n => Number.isInteger(n) && n > 0)
-  )
-  return html
-    .split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/g)
-    .map((seg, i) => {
-      if (i % 2 === 1) return seg          // 奇数位 = 代码段，原样放回
-      return seg.replace(/\[(\d{1,2})\]/g, (whole, num) => (
-        available.has(Number(num))
-          ? `<sup class="cite-ref" data-cite="${num}" title="查看来源 ${num}">${num}</sup>`
-          : `<sup class="cite-ref is-ghost" data-cite="${num}" title="本条没有来源 ${num} —— 编号可能是模型编造的，请勿当作依据">${num}</sup>`
-      ))
-    })
-    .join('')
-}
-
-function renderMarkdown(text, sources) {
-  if (!text) return ''
-  try {
-    return linkifyCitations(marked.parse(text), sources)
-  } catch {
-    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  }
-}
+// 渲染实现已搬到 ../utils/markdown.js（agent 页共用），此处不再保留本地副本。
 
 // ========== State ==========
 const question = ref('')
@@ -1295,6 +1246,8 @@ watch(() => messages.value.length, () => jumpToBottom())
 }
 
 .chat-header {
+  /* 供 .mode-switch 绝对居中（它不参与 flex 排版，避免把左右两栏往中间挤） */
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1685,6 +1638,19 @@ watch(() => messages.value.length, () => jumpToBottom())
 }
 .web-snippet { color: var(--text-secondary); }
 .web-empty { font-size: 12px; color: var(--text-secondary); }
+
+/* ---- 网页参考的折叠（原生 details）----
+   为什么默认收起：条数一多（现在 5 条、以后可能 8~20 条）会堆叠成一长条，
+   把对话主体挤下去（用户 2026-10-16 的要求）。
+   为什么「展开/收起」用 CSS 而不是加 JS 状态：少一个可能与异步消息不同步的状态源。 */
+.web-fold > summary { cursor: pointer; }
+.web-fold > summary::-webkit-details-marker { display: none; }   /* 去掉默认三角，用文字提示 */
+.web-fold > summary { list-style: none; }
+.web-fold[open] > summary { margin-bottom: 6px; }
+.web-fold-hint { font-size: 11px; color: var(--text-muted); }
+.web-fold-close-hint { display: none; }
+.web-fold[open] .web-fold-open-hint { display: none; }
+.web-fold[open] .web-fold-close-hint { display: inline; }
 
 .input-hint {
   text-align: center;

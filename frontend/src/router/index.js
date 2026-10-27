@@ -13,6 +13,13 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/agent",
+    name: "Agent",
+    component: () => import("../views/AgentView.vue"),
+    // 与 /chat 一样要求登录：/agent/stream 也走 Depends(get_current_user)
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/:pathMatch(.*)*",
     redirect: "/chat",
   },

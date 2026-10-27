@@ -1,5 +1,7 @@
-from dotenv import load_dotenv
-load_dotenv()
+# ★ 生产入口的加载必须【不依赖启动目录】：原先读的是 cwd 的 .env，
+#   启动目录里若有别的 .env，其值会因 override=False 【赢过】env_bootstrap 的链（2026-10-14 实测被劫持）。
+from env_bootstrap import load_env   # noqa: E402
+load_env()                            # 固定链：kb_bench → C: → D:（先者优先，变量级不覆盖）
 
 import asyncio
 import json
@@ -22,7 +24,10 @@ from database import (
 )
 from auth import hash_password, verify_password, create_access_token, get_current_user
 # 降级计数出口用（§39.27.6-4）：llm_roles 是底层模块，不反向依赖本文件 ⇒ 无循环导入
-from llm_roles import degraded_counts, pool_status
+from llm_roles import (
+    degraded_counts, pool_status, note_degradation, AllKeysExhausted,
+    pool_for, ROLE_MODELS, is_permanent_error,
+)
 from schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
     ChatRequest, ConversationCreate,
@@ -507,6 +512,39 @@ class AgentRequest(BaseModel):
     """放在这里而不是 schemas.py，是为了少改一个文件；
     若日后 schemas.py 成了统一入口，再挪过去即可。"""
     query: str
+    # 多轮上下文：前端把「user/assistant 纯文本」历史回传（不含 tool_call 结构）。
+    # 为什么要有它：/agent 原先是无状态单轮 —— agent 问「要再导一份还是先删旧的」，
+    # 用户回答「再导一次」时它根本不知道指的是哪件事，只会重新 find_pdf 再被拦一次。
+    history: list[dict] | None = None
+
+
+def _agent_messages(body: AgentRequest) -> dict:
+    """把（可选）历史 + 当前问题拼成 create_agent 的输入。
+
+    ⚠️ 只接受 role in {user, assistant} 且 content 为字符串的条目：
+    回灌 tool_calls / ToolMessage 结构容易与本次运行的调用 ID 冲突，得不偿失。
+    """
+    msgs: list[dict] = []
+    for m in (body.history or [])[-12:]:          # 只带最近 12 条，防止上下文无限膨胀
+        role = str(m.get("role") or "")
+        content = m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            msgs.append({"role": role, "content": content})
+    msgs.append({"role": "user", "content": body.query})
+    return {"messages": msgs}
+
+
+def _agent_max_tool_calls() -> int:
+    """读 `AGENT_MAX_TOOL_CALLS`（默认 8）。与 agent.agent._max_tool_calls 同源同默认值。
+
+    为什么不直接 import 那个私有函数：/agent 与 /agent/stream 两条链路都要能独立生效，
+    顺序耦合越少越好；两个默认值若不一致，这里会成为隐性 bug，所以注释里点明必须同步。
+    """
+    raw = os.getenv("AGENT_MAX_TOOL_CALLS", "").strip()
+    try:
+        return max(1, int(raw) if raw else 8)
+    except ValueError:
+        return 8
 
 
 @app.post("/documents")
@@ -610,6 +648,195 @@ def delete_user_document(
     return DocumentDeleteOut(**delete_document(document_id, db=db))
 
 
+def _classify_agent_error(exc: BaseException) -> tuple[str, str, bool]:
+    """把上游异常映射成 (kind, 用户可读消息, 是否值得重试)。
+
+    为什么需要它（§39.59）：`/agent` 之前任何上游错误都退化成裸 500，
+    前端只能看到 "Internal Server Error" —— 既不知道原因，也无法判断该不该重试。
+    `/chat` 早就用 `note_degradation` + 「发生错误:」文本兜住了这一点，`/agent` 没有。
+
+    ★ 刻意用【结构化字段】而不是字符串嗅探：`/chat` 那条 `startswith("发生错误:")`
+      是历史约定，新代码不该复制这种脆弱判据。
+    """
+    raw = "%s: %s" % (type(exc).__name__, str(exc))
+    low = raw.lower()
+    if "insufficient balance" in low or "429" in low or "rate limit" in low:
+        return ("upstream_quota", "上游模型额度不足或限流，请稍后重试", True)
+    if "timeout" in low or "timed out" in low:
+        return ("upstream_timeout", "上游模型响应超时，请稍后重试", True)
+    if "has no provider supported" in low or "model_not_found" in low:
+        return ("model_unavailable", "当前配置的模型不可用，请联系维护者", False)
+    return ("internal", "服务内部错误，请稍后重试", True)
+
+
+def _sse(event: str, payload: dict) -> str:
+    """拼一条 SSE 帧：`event:` + `data:` + 空行。"""
+    return "event: %s\ndata: %s\n\n" % (event, json.dumps(payload, ensure_ascii=False))
+
+
+@app.post("/agent/stream")
+def run_ingestion_agent_stream(
+    body: AgentRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """流式版 `/agent`（§39.62）：把「决定调工具 → 工具返回 → 作答」逐步推给前端。
+
+    为什么另开端点而不改 `/agent`：既有调用方（装置、脚本）依赖同步返回，
+    改签名会让它们**静默失效**。新增端点，旧端点行为完全不变。
+
+    事件（`event:` 名 ⇒ `data:` 结构）：
+      · `tool_call`   `{name, args}` —— 模型决定调用某工具（前端画卡片）
+      · `tool_result` `{name, content, ok}` —— 工具真实返回（content 截断 800 字）
+      · `answer`      `{content}` —— 最终答案
+      · `error`       `{kind, retryable, message}` —— 与 `/agent` 的 503 契约同构
+      · `done`        `{}` —— 正常结束
+
+    ⚠️ v1 粒度是「节点级」(`stream_mode="updates"`)，答案一次性推送，不是逐 token。
+    逐 token 需要 `stream_mode=["updates","messages"]`，属 v2；先落地核心价值：
+    让「工具调用」在界面上看得见、且每一步都是真实发生的。
+    """
+    from fastapi.responses import StreamingResponse
+
+    def gen():
+        pool = pool_for(ROLE_MODELS["answer"]["api_key_env"])
+        attempts = max(2, len(pool) + 1)
+        last_error: BaseException | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                agent = create_knowledge_agent(
+                    current_user.id, allowed_root=user_upload_root(current_user.id)
+                )
+                # 流式层的预算硬停：工具层已经会拒绝超额调用，这里再主动断开，
+                # 省掉「模型看到拒绝后再补一次客套话」的那一轮调用（省钱，也让上限可预测）
+                budget = {"used": 0, "max": _agent_max_tool_calls()}
+                parts: list[str] = []
+                # ★ v2：逐 token 流式（§39.74）。两种模式一起订阅，按 (mode, payload) 分发。
+                #   实测（§39.74 探测）必须过滤的两种污染：
+                #     ① node=tools 的 ToolMessage —— 工具返回的原始 JSON（实测 3767 字）会被当成正文吐出来；
+                #     ② 带 tool_call_chunks 的片段 —— 那是「决定调工具」的 JSON 碎片，不是给人看的。
+                #   ⚠️ 还有一个没法提前判断的：模型调工具前会先流一段**前言**（实测「我先找一下你的简历文件。」），
+                #      它与最终答案同为 node=model 的文本，开头无法区分。所以先乐观地流，
+                #      等 updates 里出现带 tool_calls 的 AIMessage（=这一轮其实是工具轮）时，
+                #      发 token_reset 让前端把刚流出的前言撤掉 —— 宁可撤回，也不假装流式。
+                preamble = {"dirty": False}   # 本轮是否已向客户端流出过文字（撤回时需要）
+                for item in agent.stream(
+                    _agent_messages(body),
+                    stream_mode=["updates", "messages"],
+                ):
+                    if not (isinstance(item, tuple) and len(item) == 2):
+                        continue
+                    mode, payload = item
+
+                    if mode == "messages":
+                        m_chunk, meta = payload
+                        node = (meta or {}).get("langgraph_node")
+                        # 只取模型节点、且不是工具回灌的内容
+                        if node != "model" or type(m_chunk).__name__ == "ToolMessage":
+                            continue
+                        if getattr(m_chunk, "tool_call_chunks", None):
+                            continue          # 工具调用碎片：不推
+                        text = m_chunk.content if isinstance(m_chunk.content, str) else ""
+                        if text:
+                            preamble["dirty"] = True
+                            yield _sse("token", {"text": text})
+                        continue
+
+                    # ---- mode == "updates"（工具链与终态，逻辑与 v1 一致）----
+                    for _node, payload_u in (payload or {}).items():
+                        for msg in (payload_u or {}).get("messages") or []:
+                            calls = getattr(msg, "tool_calls", None)
+                            if calls:
+                                # 这一轮是「工具轮」⇒ 刚才流过的文字是前言，撤回
+                                if preamble["dirty"]:
+                                    preamble["dirty"] = False
+                                    yield _sse("token_reset", {})
+                                for tc in calls:
+                                    budget["used"] += 1
+                                    if budget["used"] > budget["max"]:
+                                        yield _sse("error", {
+                                            "kind": "budget_exhausted",
+                                            "retryable": False,
+                                            "message": (
+                                                "本次任务工具调用已达上限 %d 次"
+                                                "（AGENT_MAX_TOOL_CALLS），已主动停止以免继续消耗额度。"
+                                                % budget["max"]
+                                            ),
+                                        })
+                                        yield _sse("done", {})
+                                        return
+                                    yield _sse("tool_call", {
+                                        "name": tc.get("name"),
+                                        "args": tc.get("args"),
+                                        "step": budget["used"],
+                                        "max": budget["max"],
+                                    })
+                                continue
+                            if type(msg).__name__ == "ToolMessage":
+                                tool_name = getattr(msg, "name", None)
+                                raw = str(getattr(msg, "content", "") or "")
+                                # ★ 结构化来源单独发一个事件（§39.80）：
+                                #   模型正文里只写【1】这种编号，而 agent 页没有来源面板 ——
+                                #   用户看得出「有依据」却点不开、也不知道是哪份文件。
+                                #   这里把 search_knowledge 真实返回的 sources 原样传过去，
+                                #   由前端渲染成答案下方的「来源清单」（数据来自工具返回值，不是模型自述）。
+                                if tool_name == "search_knowledge":
+                                    try:
+                                        parsed = json.loads(raw)
+                                    except Exception:
+                                        parsed = None
+                                    if isinstance(parsed, dict) and parsed.get("sources"):
+                                        yield _sse("sources", {"items": [
+                                            {
+                                                "n": s.get("n"),
+                                                "filename": s.get("filename"),
+                                                "document_id": s.get("document_id"),
+                                                "section_path": s.get("section_path"),
+                                                "snippet": s.get("snippet"),
+                                            }
+                                            for s in parsed["sources"] if isinstance(s, dict)
+                                        ]})
+                                yield _sse("tool_result", {
+                                    "name": tool_name,
+                                    "content": raw[:800],
+                                    "ok": True,
+                                })
+                                continue
+                            text = str(getattr(msg, "content", "") or "")
+                            if text:
+                                parts.append(text)
+                # answer 仍是终态权威值：前端用它校正逐 token 拼出的内容（幂等，防重复）
+                yield _sse("answer", {"content": "".join(parts)})
+                yield _sse("done", {})
+                return
+            except AllKeysExhausted as e:
+                last_error = e
+                note_degradation("agent", "all_keys_exhausted", str(e)[:120])
+                yield _sse("error", {"kind": "keys_exhausted", "retryable": False,
+                                     "message": "模型 key 池额度全部耗尽，请稍后或补充 key"})
+                return
+            except Exception as e:
+                last_error = e
+                if is_permanent_error(e) and pool.can_rotate():
+                    name, _k = pool.exhaust_current()
+                    note_degradation("agent", "key_rotated",
+                                     "stream 第%d次额度类失败(%s)，已换到 %s"
+                                     % (attempt, type(e).__name__, name))
+                    continue
+                kind, message, retryable = _classify_agent_error(e)
+                note_degradation("agent", kind, "%s: %s" % (type(e).__name__, str(e)[:120]))
+                yield _sse("error", {"kind": kind, "retryable": retryable, "message": message})
+                return
+        note_degradation("agent", "keys_exhausted", str(last_error)[:110])
+        yield _sse("error", {"kind": "keys_exhausted", "retryable": False,
+                             "message": "所有可用 key 均失败或额度耗尽，请稍后重试"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/agent")
 def run_ingestion_agent(
     body: AgentRequest,
@@ -627,10 +854,60 @@ def run_ingestion_agent(
     if not query:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    agent = create_knowledge_agent(
-        current_user.id, allowed_root=user_upload_root(current_user.id)
-    )
-    result = agent.invoke({"messages": [{"role": "user", "content": query}]})
+    # ★ 错误必须显式（§39.52 阶段 F 的第一条）：改造前这里直接 agent.invoke()，
+    #   上游 429 / 额度不足 / 超时都会变成裸 500，前端只能看到「Internal Server Error」，
+    #   无法区分「我这边写错了」和「上游暂时没额度」。实测见过 429 insufficient balance
+    #   （2026-10-19，/agent 第 4 次调用）。
+    #   现在：① 记进降级计数（/health/degradations 可见）② 回 503 + 结构化原因，
+    #   让调用方知道「不是你的问题、可不可重试」。
+    # ★ key 轮换（§39.61）：/chat 走 `invoke_with_retry`（内含换 key），而 /agent 是
+    #   langgraph 内部直接调模型 —— 完全绕过那层，于是「有备用 key 却从不启用」。
+    #   实测证据：`MS_API_KEY_2` 长期显示「✅备用」，日志里 `key_rotated` 出现 0 次，
+    #   429 insufficient balance 直接抛成裸 500。
+    #   这里在【端点层】重建 agent 来换 key：make_model 每次都取 pool.current()，
+    #   所以标记耗尽后再建就是新 key —— 不需要给 langgraph 内部注入任何东西。
+    pool = pool_for(ROLE_MODELS["answer"]["api_key_env"])
+    attempts = max(2, len(pool) + 1)
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            agent = create_knowledge_agent(
+                current_user.id, allowed_root=user_upload_root(current_user.id)
+            )
+            result = agent.invoke(_agent_messages(body))
+            break
+        except AllKeysExhausted as e:
+            last_error = e
+            note_degradation("agent", "all_keys_exhausted", str(e)[:120])
+            raise HTTPException(status_code=503, detail={
+                "ok": False,
+                "error": {"kind": "keys_exhausted", "retryable": False,
+                          "message": "模型 key 池额度全部耗尽，请稍后或补充 key"},
+            }) from e
+        except Exception as e:
+            last_error = e
+            # 额度 / 鉴权类：同 key 重试无意义，换 key 才有意义（见 llm_roles._PERMANENT）
+            if is_permanent_error(e) and pool.can_rotate():
+                name, _k = pool.exhaust_current()
+                note_degradation("agent", "key_rotated",
+                                 "第%d次额度类失败(%s)，已换到 %s"
+                                 % (attempt, type(e).__name__, name))
+                continue
+            kind, message, retryable = _classify_agent_error(e)
+            note_degradation("agent", kind, "%s: %s" % (type(e).__name__, str(e)[:120]))
+            raise HTTPException(status_code=503, detail={
+                "ok": False,
+                "error": {"kind": kind, "retryable": retryable, "message": message},
+            }) from e
+    else:
+        # 循环走完仍失败：所有 key 都用过（或 can_rotate 为假却仍失败）
+        note_degradation("agent", "keys_exhausted",
+                         "尝试 %d 次后仍失败：%s" % (attempts, str(last_error)[:110]))
+        raise HTTPException(status_code=503, detail={
+            "ok": False,
+            "error": {"kind": "keys_exhausted", "retryable": False,
+                      "message": "所有可用 key 均失败或额度耗尽，请稍后重试"},
+        })
 
     messages = []
     for msg in result["messages"]:

@@ -115,8 +115,16 @@ def make_model(role: str, **kwargs):
             "角色 %s 需要环境变量 %s（及可选的 %s），但它们都为空（拒绝静默换后端）"
             % (role, cfg["api_key_env"], "/".join(pool.alt_env_names)))
     env_name, key = pool.current()
+    # ★ extra_body 改成「合并」而不是「写死 + 不许覆盖」（§39.62）：
+    #   原写法 `extra_body=cfg.get("extra_body"), **kwargs` ⇒ 调用方若也传 extra_body，
+    #   就变成「重复关键字参数」直接 TypeError ⇒ 于是 `enable_thinking` 只能收不能用，
+    #   成为假接口（agent/agent.py 里那条注释就是它的墓志铭）。
+    #   现在：config 给默认值，调用方的键覆盖同名项 —— 按角色默认 + 单次调用特例两不误。
+    #   不传 extra_body 时行为与原先完全一致（默认值原样透传）。
+    extra_body = dict(cfg.get("extra_body") or {})
+    extra_body.update(kwargs.pop("extra_body", None) or {})
     model = ChatOpenAI(model=cfg["model"], api_key=key, base_url=cfg["base_url"],
-                       extra_body=cfg.get("extra_body"), **kwargs)
+                       extra_body=extra_body or None, **kwargs)
     _MODEL_POOL[id(model)] = pool
     return model, dict(cfg)
 

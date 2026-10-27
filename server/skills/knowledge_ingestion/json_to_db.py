@@ -89,7 +89,7 @@ def _json(value: object) -> str:
 
 def save_chunks(
     *, pdf_path: str | Path, title: str, chunks: list[dict[str, Any]],
-    user_id: int, db: Session | None = None
+    user_id: int, db: Session | None = None, dedupe: bool = True
 ) -> tuple[int, int]:
     """Store one ingested document in SQL and its searchable representations in Chroma.
 
@@ -109,14 +109,18 @@ def save_chunks(
         # ⚠️ 必须带 user_id 条件：否则别的用户上传了相同 file_path 的 PDF 时，
         #    这一次入库会把【别人的】文档连同向量一起删掉（跨用户破坏）。
         resolved_path = str(Path(pdf_path).resolve())
-        old_docs = session.query(KnowledgeDocument).filter(
-            KnowledgeDocument.file_path == resolved_path,
-            KnowledgeDocument.user_id == user_id,
-        ).all()
-        for old in old_docs:
-            _delete_vectors(old.id)   # 与 delete_document 共用同一处 Chroma 删除逻辑
-            session.delete(old)       # cascade 删旧 chunks
-        session.commit()
+        # dedupe=True（默认）：同一路径重跑先清旧行，保证幂等（断点缓存重跑不会堆重复）。
+        # dedupe=False：显式允许「同一路径并存多份」——用户选了「给自由度」，
+        #   所以必须有一个真能留下两份同路径文档的入口，否则 force=true 也只是白叫。
+        if dedupe:
+            old_docs = session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.file_path == resolved_path,
+                KnowledgeDocument.user_id == user_id,
+            ).all()
+            for old in old_docs:
+                _delete_vectors(old.id)   # 与 delete_document 共用同一处 Chroma 删除逻辑
+                session.delete(old)       # cascade 删旧 chunks
+            session.commit()
 
         document = KnowledgeDocument(
             user_id=user_id,

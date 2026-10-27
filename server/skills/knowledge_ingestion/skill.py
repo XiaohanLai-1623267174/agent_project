@@ -56,7 +56,7 @@ def _write_cached_chunks(
 
 
 def ingest_pdf_to_knowledge_base(
-    pdf_path: str, title: str | None = None, *, user_id: int
+    pdf_path: str, title: str | None = None, *, user_id: int, allow_duplicate: bool = False
 ) -> dict[str, object]:
     """Run PDF → cleaned Markdown → metadata chunks → SQLite + Chroma.
 
@@ -85,13 +85,20 @@ def ingest_pdf_to_knowledge_base(
         else:
             print(f"命中 chunks 缓存（{_cache_path(source)}），跳过清洗与元数据提取", flush=True)
 
-        document_title = title or (chunks[0]["doc_title"] if chunks else source.stem)
+        # 文档标题以**文件名**为准（`简历.pdf` → `简历`）。
+        # 原来取 `chunks[0]["doc_title"]`（模型从正文里抽的标题），对制度类文档没问题，
+        # 但对简历会抽出**人名**（实测 title 变成「赖肖韩」），用户看到「文件名: 赖肖韩」
+        # 完全对不上。文件名是用户自己起的、稳定可预测，所以默认用它；
+        # 仍然允许调用方显式传 title 覆盖（agent 的 ingest_pdf 有该参数）。
+        document_title = title or source.stem
         t0 = time.perf_counter()
         document_id, chunk_count = save_chunks(
             pdf_path=source,
             title=str(document_title),
             chunks=chunks,
             user_id=user_id,
+            # allow_duplicate=True 时关掉同路径幂等删除 ⇒ 同一份文件可以并存多份
+            dedupe=not allow_duplicate,
         )
         print(f"入库（SQLite + Chroma）耗时 {time.perf_counter() - t0:.1f}s", flush=True)
         return {

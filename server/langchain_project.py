@@ -864,7 +864,7 @@ def _assert_context_owner(context, user_id: int, where: str) -> None:
         )
 
 
-def reranked(original_query, user_id, top_n=5, context=None, trace=None):
+def reranked(original_query, user_id, top_n=5, context=None, trace=None, only_doc_ids=None):
     """用户隔离版检索：向量 + BM25 都只在该用户自己的文档里检索。
 
     user_id 为必填 —— 故意不给默认值，让任何遗漏调用方在开发期就报错，
@@ -879,6 +879,10 @@ def reranked(original_query, user_id, top_n=5, context=None, trace=None):
 
     trace：可选 dict，本函数把本轮检索的可观测结果写进去
       {"attempted": True, "candidates": N, "sources": [...]}，供 /chat 经 SSE 推给前端。
+
+    only_doc_ids：把检索**再收窄到这些文档**（agent 的 search_knowledge(filename=...) 用）。
+      ★ 只做「与用户白名单求交」，绝不并集 —— 传错/传恶意 id 最多变成"检索范围更小"，
+        不可能越过 user_doc_ids 的边界。这是刻意的单向收窄，不是"多一个过滤开关"。
       ★ 由调用方【按请求】创建，绝不用模块级全局 —— 否则并发请求会互相串档。
     """
     _assert_context_owner(context, user_id, "reranked()")
@@ -901,6 +905,21 @@ def reranked(original_query, user_id, top_n=5, context=None, trace=None):
             allowed = set(doc_ids)
         elif isinstance(trace, dict):
             trace["doc_router"]["fell_back"] = True
+
+    if only_doc_ids is not None:
+        narrowed_only = [d for d in doc_ids if d in set(only_doc_ids)]
+        if narrowed_only:                 # 求交后为空 ⇒ 保持原范围（宁可多检索，也不返回空）
+            doc_ids = narrowed_only
+            allowed = set(doc_ids)
+        elif isinstance(trace, dict):
+            trace["only_doc_ids_ignored"] = True
+
+    if not doc_ids:
+        # ★ 空列表保护：Chroma 的 {"document_id": {"$in": []}} 会直接抛 ValueError（→ 500），
+        #   而不是返回空结果。真实路径本不该走到这里，但"本不该"不是保护 —— 装置里的
+        #   M1 变异真把 doc_ids 打空并炸出了这个异常，所以现在就补上。
+        _record(trace, 0, [])
+        return "未检索到资料"
 
     queries = rewrite(original_query, context)
     if isinstance(trace, dict):
@@ -1049,7 +1068,9 @@ def _web_block(question, trace, web: bool) -> str:
             status = outcome.to_status()
             status["reason_text"] = "联网搜索内部异常：%s" % type(e).__name__
             trace["web"] = status
-        print("[联网搜索] 内部异常（已降级为「没搜到」）：%s: %s" % (type(e).__name__, e))
+        # ★ 走 `websearch._log`：这条日志以前是裸 print ⇒ GBK 控制台下汉字能写、特殊符号会抛，
+#   而"日志抛异常"会被上层的 except 伪装成"联网失败"✗（2026-10-16 的真实故障）。
+        websearch._log("[联网搜索] 内部异常（已降级为「没搜到」）：%s: %s" % (type(e).__name__, e))
     return websearch.render_web_block(outcome)
 
 
@@ -1128,6 +1149,21 @@ direct_prompt_hist = ChatPromptTemplate.from_template(direct_template_hist)
 _DIRECT_WEB_ANCHOR = DIRECT_HIST_SLOT + "【用户问题】"
 direct_template_web = direct_template_hist.replace(_DIRECT_WEB_ANCHOR, WEB_SLOT + _DIRECT_WEB_ANCHOR, 1)
 direct_prompt_web = ChatPromptTemplate.from_template(direct_template_web)
+
+# ★ 联网时把「篇幅控制在 200 字以内」放宽（2026-10-16 用户实测：问「总结最近一周的 AI 大事」，
+#   模板却在命令它别超过 200 字 ⇒ 回答很短、不像总结 ✗；而这类问题恰好走**直答链**）。
+#   ★ 用**机械替换**而不是新增 `{length_rule}` 槽：加槽会让所有直接 format 旧模板的调用点
+#     （装置在内）抛 `KeyError: 'length_rule'` ✗ —— 实测踩到；`.partial()` 只护得住一个入口。
+#     替换法还有个好处：不开联网时模板**逐字未变**，"空值 ⇒ 渲染一致"的既有不变量自动成立。
+_DIRECT_LEN_ANCHOR = (
+    "★ 本链用于与奖学金/综测【无关】的问题，篇幅控制在 200 字以内。\n"
+    "  注意是\"在 200 字内尽量说全\"，不是\"为了短而砍掉要点\" ——\n"
+    "  字数是上限而非目标；信息量与字数冲突时优先保留信息。")
+_DIRECT_LEN_RELAXED = (
+    "★ 本次开了**联网搜索**：篇幅按内容需要来，**不要**为了凑 200 字上限而砍掉要点；\n"
+    "  用户要「总结 / 梳理 / 盘点」时，写成分类的要点式总结（信息量优先、别写套话）。")
+direct_template_web_len = direct_template_web.replace(_DIRECT_LEN_ANCHOR, _DIRECT_LEN_RELAXED, 1)
+direct_prompt_web_len = ChatPromptTemplate.from_template(direct_template_web_len)
 
 # 历史块的使用规则。★ 刻意放在【块里面】而不是模板静态文本里：
 #   这样"没有历史"的请求，prompt 里连这些规则都不会出现 ⇒ 单轮逐字不变成立。
@@ -1218,7 +1254,10 @@ def build_direct_chain(context=None, trace=None, question=None, web=False):
                 #   而实测那条路的回答是「我无法直接获取实时日期」（msg142/144）。
                 "today": _today_line()}
 
-    return RunnableLambda(_prepare) | direct_prompt_web | model1 | StrOutputParser()
+    # ★ 联网这条用放宽篇幅的模板（`direct_prompt_web_len`）；不联网时逐字用旧模板。
+    #   `web_block` 为空 ⇔ 没开联网（开但没搜到也会渲染出「没搜到」说明 ⇒ 非空）⇒ 判据可靠。
+    _prompt = direct_prompt_web_len if web_block else direct_prompt_web
+    return RunnableLambda(_prepare) | _prompt | model1 | StrOutputParser()
 
 
 # ============ 核心：根据分类结果路由 ============

@@ -146,7 +146,7 @@ console.log('-'.repeat(100))
 check('⑨网页参考块条件是 msg.web && msg.web.attempted（没搜过就整块不出现）',
       /v-if="!msg\.streaming && msg\.role === 'assistant' && msg\.web && msg\.web\.attempted"/.test(sfc), '')
 
-const webListBlock = (sfc.match(/<ol v-if="msg\.web\.count > 0" class="web-list">([\s\S]*?)<\/ol>/) || [])[1] || ''
+const webListBlock = (sfc.match(/<ol class="web-list">([\s\S]*?)<\/ol>/) || [])[1] || ''
 check('★防空过：取到网页列表模板块', webListBlock.length > 100, `${Buffer.byteLength(webListBlock)} B`)
 check('⑩每条网页是可点链接（href/target/rel 三件套齐全）',
       /:href="w\.url"/.test(webListBlock) && /target="_blank"/.test(webListBlock)
@@ -168,5 +168,30 @@ check('⑮与「来源 N 段」用两套独立 CSS 类（视觉可区分）',
 check('⑯检索详情面板里有「联网」这一行（这次到底搜没搜、走哪个源、多久、为什么没结果）',
       /<span class="debug-k">联网<\/span>/.test(sfc) && /msg\.web\.provider_label/.test(sfc)
       && /msg\.web\.elapsed_ms/.test(sfc), '')
+
+// ---------- 4) 折叠（2026-10-16 用户：「网页参考堆叠很多、太杂乱」）----------
+// 为什么必须钉住这几条：折叠是**唯一**会把内容藏起来的功能 ⇒ 一旦用错地方，
+// 「搜不到」这种诚实信号就会被藏掉（那比不折叠更糟）。
+console.log('-'.repeat(100))
+// ★ 正则必须容忍标签里 `v-if="msg.web.count > 0"` 自带的那个 `>`（`[^>]*` 会在这里断掉 ⇒ 匹配不到），
+//   但又要容忍 Z3 突变在 class 后面追加的 `open` ⇒ 前缀写死、后缀用 `[^>]*`。
+const foldBlock = (sfc.match(/<details v-if="msg\.web\.count > 0" class="web-fold"[^>]*>([\s\S]*?)<\/details>/) || [])[1] || ''
+check('★防空过：取到网页参考的折叠块模板', foldBlock.length > 100, `${Buffer.byteLength(foldBlock)} B`)
+check('⑰★ 默认**收起**（原生 details 不带 open ⇒ 一进来不堆叠）',
+      /<details v-if="msg\.web\.count > 0" class="web-fold">/.test(sfc) && !/<details[^>]*\sopen/.test(sfc), '')
+check('⑱条数徽标在 summary 里（收起时仍看得见「参考了 N 条」，不是把事实也藏起来）',
+      /<summary class="web-head">/.test(foldBlock) && /web-badge/.test(foldBlock)
+      && /\{\{ msg\.web\.count \}\}/.test(foldBlock), '')
+check('⑲条目列表确实在 details 内部（放到外面折叠就不起作用）',
+      /class="web-list"/.test(foldBlock) && /v-for="\(w, wi\) in msg\.web\.items"/.test(foldBlock), '')
+check('⑳「展开/收起」由 CSS 按 [open] 切换（不再引入 JS 状态源）',
+      /\.web-fold-close-hint \{ display: none; \}/.test(sfc)
+      && /\.web-fold\[open\] \.web-fold-open-hint \{ display: none; \}/.test(sfc)
+      && /\.web-fold\[open\] \.web-fold-close-hint \{ display: inline; \}/.test(sfc), '')
+check('㉑★ 「搜不到」那支**不折叠**（诚实信号必须一眼看见，不能被收起藏掉）',
+      /<div v-else class="web-empty">/.test(sfc) && !/web-empty/.test(foldBlock), '')
+check('㉒折叠块与「来源 N 段」仍是两套类名（视觉/语义都不许混）',
+      /class="web-fold"/.test(sfc) && /class="msg-sources"/.test(sfc)
+      && !/web-fold/.test(sfc.match(/<ol class="sources-list">[\s\S]*?<\/ol>/) || [''])[0], '')
 
 finish()
